@@ -2283,6 +2283,13 @@ See https://jj-vcs.github.io/jj/latest/working-copy/#stale-working-copy \
         repo: &ReadonlyRepo,
         conflicted_commits: Vec<CommitId>,
     ) -> Result<(), CommandError> {
+        let should_show_resolve_conflicts_hint =
+            self.settings().get_bool("hints.resolving-conflicts")?;
+
+        if !should_show_resolve_conflicts_hint {
+            return Ok(());
+        }
+
         let only_one_conflicted_commit = conflicted_commits.len() == 1;
         let root_conflicts_revset = RevsetExpression::commits(conflicted_commits)
             .roots()
