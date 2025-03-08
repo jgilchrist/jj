@@ -207,14 +207,30 @@ async fn read_file_contents(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum InitialSelection {
+    All,
+    None,
+}
+
+impl InitialSelection {
+    fn is_checked(&self) -> bool {
+        match self {
+            InitialSelection::All => true,
+            InitialSelection::None => false,
+        }
+    }
+}
+
 fn make_section_changed_lines(
     contents: &str,
     change_type: scm_record::ChangeType,
+    initial_selection: InitialSelection,
 ) -> Vec<scm_record::SectionChangedLine<'static>> {
     contents
         .split_inclusive('\n')
         .map(|line| scm_record::SectionChangedLine {
-            is_checked: false,
+            is_checked: initial_selection.is_checked(),
             change_type,
             line: Cow::Owned(line.to_owned()),
         })
@@ -224,6 +240,7 @@ fn make_section_changed_lines(
 fn make_diff_sections(
     left_contents: &str,
     right_contents: &str,
+    initial_selection: InitialSelection,
 ) -> Result<Vec<scm_record::Section<'static>>, BuiltinToolError> {
     let diff = ContentDiff::by_line([left_contents.as_bytes(), right_contents.as_bytes()]);
     let mut sections = Vec::new();
@@ -258,8 +275,16 @@ fn make_diff_sections(
                     })?;
                 sections.push(scm_record::Section::Changed {
                     lines: [
-                        make_section_changed_lines(left_side, scm_record::ChangeType::Removed),
-                        make_section_changed_lines(right_side, scm_record::ChangeType::Added),
+                        make_section_changed_lines(
+                            left_side,
+                            scm_record::ChangeType::Removed,
+                            initial_selection,
+                        ),
+                        make_section_changed_lines(
+                            right_side,
+                            scm_record::ChangeType::Added,
+                            initial_selection,
+                        ),
                     ]
                     .concat(),
                 });
@@ -274,6 +299,7 @@ async fn make_diff_files(
     trees: Diff<&MergedTree>,
     tree_diff: BoxStream<'_, CopiesTreeDiffEntry>,
     marker_style: ConflictMarkerStyle,
+    initial_selection: InitialSelection,
 ) -> Result<(Vec<RepoPathBuf>, Vec<scm_record::File<'static>>), BuiltinToolError> {
     let materialize_options = ConflictMaterializeOptions {
         marker_style,
@@ -294,7 +320,7 @@ async fn make_diff_files(
 
         if left_info.file_mode != right_info.file_mode {
             sections.push(scm_record::Section::FileMode {
-                is_checked: false,
+                is_checked: initial_selection.is_checked(),
                 mode: right_info.file_mode,
             });
         }
@@ -329,7 +355,11 @@ async fn make_diff_files(
                     num_bytes: _,
                 },
             ) => sections.push(scm_record::Section::Changed {
-                lines: make_section_changed_lines(&contents, scm_record::ChangeType::Added),
+                lines: make_section_changed_lines(
+                    &contents,
+                    scm_record::ChangeType::Added,
+                    initial_selection,
+                ),
             }),
 
             (
@@ -340,7 +370,11 @@ async fn make_diff_files(
                 },
                 FileContents::Absent,
             ) => sections.push(scm_record::Section::Changed {
-                lines: make_section_changed_lines(&contents, scm_record::ChangeType::Removed),
+                lines: make_section_changed_lines(
+                    &contents,
+                    scm_record::ChangeType::Removed,
+                    initial_selection,
+                ),
             }),
 
             (
@@ -355,7 +389,11 @@ async fn make_diff_files(
                     num_bytes: _,
                 },
             ) => {
-                sections.extend(make_diff_sections(&old_contents, &new_contents)?);
+                sections.extend(make_diff_sections(
+                    &old_contents,
+                    &new_contents,
+                    initial_selection,
+                )?);
             }
 
             (
@@ -373,7 +411,7 @@ async fn make_diff_files(
             (left, right @ FileContents::Binary { .. })
             | (left @ FileContents::Binary { .. }, right) => {
                 sections.push(scm_record::Section::Binary {
-                    is_checked: false,
+                    is_checked: initial_selection.is_checked(),
                     old_description: left.describe().map(Cow::Owned),
                     new_description: right.describe().map(Cow::Owned),
                 });
@@ -560,6 +598,7 @@ pub async fn edit_diff_builtin(
     trees: Diff<&MergedTree>,
     matcher: &dyn Matcher,
     conflict_marker_style: ConflictMarkerStyle,
+    initial_selection: InitialSelection,
 ) -> Result<MergedTree, BuiltinToolError> {
     let store = trees.before.store().clone();
     // TODO: handle copy tracking
@@ -568,7 +607,7 @@ pub async fn edit_diff_builtin(
         .before
         .diff_stream_with_copies(trees.after, matcher, &copy_records);
     let (changed_files, files) =
-        make_diff_files(&store, trees, tree_diff, conflict_marker_style).await?;
+        make_diff_files(&store, trees, tree_diff, conflict_marker_style, initial_selection).await?;
     let mut input = scm_record::helpers::CrosstermInput;
     let recorder = scm_record::Recorder::new(
         scm_record::RecordState {
@@ -655,8 +694,11 @@ fn make_merge_sections(
                                         item: "conflicting hunk",
                                     }
                                 })?;
-                                let changed_lines =
-                                    make_section_changed_lines(contents, change_type);
+                                let changed_lines = make_section_changed_lines(
+                                    contents,
+                                    change_type,
+                                    InitialSelection::None,
+                                );
                                 Ok(changed_lines)
                             })
                             .flatten_ok()
@@ -809,6 +851,7 @@ mod tests {
             Diff::new(left_tree, right_tree),
             tree_diff,
             ConflictMarkerStyle::Diff,
+            InitialSelection::None,
         )
         .block_on()
         .unwrap()

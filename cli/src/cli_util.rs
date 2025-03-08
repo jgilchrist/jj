@@ -182,6 +182,7 @@ use crate::formatter::FormatRecorder;
 use crate::formatter::Formatter;
 use crate::formatter::FormatterExt as _;
 use crate::merge_tools::DiffEditor;
+use crate::merge_tools::InitialSelection;
 use crate::merge_tools::MergeEditor;
 use crate::merge_tools::MergeToolConfigError;
 use crate::operation_templater::OperationTemplateLanguage;
@@ -3383,6 +3384,7 @@ impl DiffSelector {
                             Diff::new(trees.before, &selected_tree),
                             matcher,
                             format_instructions,
+                            InitialSelection::None,
                         )
                         .await?)
                 }
