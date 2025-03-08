@@ -1004,6 +1004,10 @@ Thanks to the people who made this release happen!
   be parsed correctly. If you are using version 0.18.0 or earlier, check out a
   non-conflicted commit before upgrading to prevent issues.
 
+* The terminal UI of `jj diffedit` now starts with the whole diff checked, meaning
+  you need to uncheck what you want to discard, instead of checking what you want to
+  preserve.
+
 ### Deprecations
 
 ### New features

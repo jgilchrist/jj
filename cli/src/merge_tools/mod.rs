@@ -45,6 +45,7 @@ use pollster::FutureExt as _;
 use thiserror::Error;
 
 use self::builtin::BuiltinToolError;
+pub use self::builtin::InitialSelection;
 use self::builtin::edit_diff_builtin;
 use self::builtin::edit_merge_builtin;
 use self::diff_working_copies::DiffCheckoutError;
@@ -297,14 +298,17 @@ impl DiffEditor {
         right_tree: &MergedTree,
         matcher: &dyn Matcher,
         format_instructions: impl FnOnce() -> String,
+        initial_selection: InitialSelection,
     ) -> Result<MergedTreeId, DiffEditError> {
         match &self.tool {
-            DiffEditTool::Builtin => {
-                Ok(
-                    edit_diff_builtin(left_tree, right_tree, matcher, self.conflict_marker_style)
-                        .map_err(Box::new)?,
-                )
-            }
+            DiffEditTool::Builtin => Ok(edit_diff_builtin(
+                left_tree,
+                right_tree,
+                matcher,
+                self.conflict_marker_style,
+                initial_selection,
+            )
+            .map_err(Box::new)?),
             DiffEditTool::External(editor) => {
                 let instructions = self.use_instructions.then(format_instructions);
                 edit_diff_external(
