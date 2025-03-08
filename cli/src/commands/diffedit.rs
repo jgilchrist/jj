@@ -27,6 +27,7 @@ use crate::cli_util::print_unmatched_explicit_paths;
 use crate::cli_util::rebase_or_reparent_descendants;
 use crate::command_error::CommandError;
 use crate::complete;
+use crate::merge_tools::InitialSelection;
 use crate::ui::Ui;
 
 /// Touch up the content changes in a revision with a diff editor
@@ -141,7 +142,7 @@ don't make any changes, then the operation will be aborted.",
     let base_tree = merge_commit_trees(tx.repo(), base_commits.as_slice()).await?;
     let tree = target_commit.tree();
     let edited_tree = diff_editor
-        .edit(Diff::new(&base_tree, &tree), &matcher, format_instructions)
+        .edit(Diff::new(&base_tree, &tree), &matcher, format_instructions, InitialSelection::All)
         .await?;
     if edited_tree.tree_ids() == target_commit.tree_ids() {
         writeln!(ui.status(), "Nothing changed.")?;
