@@ -280,7 +280,7 @@ pub async fn cmd_git_push(
              remotes.<name>.auto-track-bookmarks instead."
         )?;
     }
-    let mut workspace_command = command.workspace_helper(ui)?;
+    let mut workspace_command = command.workspace_helper(ui).await?;
 
     let default_remote;
     let remote = if let Some(name) = &args.remote {
@@ -1174,13 +1174,14 @@ async fn create_change_bookmarks(
         return Ok(vec![]);
     }
 
-    let all_commits: Vec<_> = tx
-        .base_workspace_helper()
-        .resolve_some_revsets(ui, changes)
-        .await?
-        .iter()
-        .map(|id| tx.repo().store().get_commit(id))
-        .try_collect()?;
+    let all_commits = try_join_all(
+        tx.base_workspace_helper()
+            .resolve_some_revsets(ui, changes)
+            .await?
+            .iter()
+            .map(|id| tx.repo().store().get_commit_async(id)),
+    )
+    .await?;
     let bookmark_names: Vec<_> = {
         let template_text = tx.settings().get_string("templates.git_push_bookmark")?;
         let template = tx.parse_commit_template(ui, &template_text)?;

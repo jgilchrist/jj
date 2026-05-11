@@ -58,6 +58,11 @@ use crate::ui::Ui;
 /// `remotes.<name>.fetch-bookmarks` is not configured, the default fetch
 /// refspecs for the selected remotes are read from the Git configuration.
 ///
+/// Commits that are no longer reachable from any branch on the remote will be
+/// considered abandoned by the remote, and will be abandoned in the local repo
+/// to match the remote. Set `git.abandon-unreachable-commits` to `false` to
+/// disable this behavior.
+///
 /// If a working-copy commit gets abandoned, it will be given a new, empty
 /// commit. This is true in general; it is not specific to this command.
 #[derive(clap::Args, Clone, Debug)]
@@ -129,7 +134,7 @@ pub async fn cmd_git_fetch(
     command: &CommandHelper,
     args: &GitFetchArgs,
 ) -> Result<(), CommandError> {
-    let mut workspace_command = command.workspace_helper(ui)?;
+    let mut workspace_command = command.workspace_helper(ui).await?;
     let remote_expr = if args.all_remotes {
         StringExpression::all()
     } else if let Some(remotes) = &args.remotes {
@@ -241,7 +246,7 @@ pub async fn cmd_git_fetch(
     }
 
     let import_stats = git_fetch.import_refs().await?;
-    print_git_import_stats(ui, &tx, &import_stats)?;
+    print_git_import_stats(ui, &tx, &import_stats).await?;
 
     if let Some(bookmark_expr) = &common_bookmark_expr {
         warn_if_branches_not_found(ui, &tx, bookmark_expr, &matching_remotes)?;

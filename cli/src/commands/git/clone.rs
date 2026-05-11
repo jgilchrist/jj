@@ -34,7 +34,8 @@ use jj_lib::repo::Repo as _;
 use jj_lib::str_util::StringExpression;
 use jj_lib::workspace::Workspace;
 
-use super::write_repository_level_trunk_alias;
+use super::RepoPresets;
+use super::write_repo_presets;
 use crate::cli_util::CommandHelper;
 use crate::cli_util::WorkspaceCommandHelper;
 use crate::command_error::CommandError;
@@ -133,7 +134,20 @@ pub struct GitCloneArgs {
     ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
     #[arg(long = "branch", short, alias = "bookmark", value_name = "BRANCH")]
     branches: Option<Vec<String>>,
-    // TODO: add --tag option and save it in jj's repo config? (#7819)
+
+    /// Fetch only some of the tags (can be repeated)
+    ///
+    /// By default, the specified pattern matches tag names with glob syntax,
+    /// but only `*` is expanded. Other wildcard characters such as `?` are
+    /// *not* supported. Patterns can be repeated or combined with [logical
+    /// operators] to specify multiple tags, but only union and negative
+    /// intersection are supported.
+    ///
+    /// [logical operators]:
+    ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
+    #[arg(long = "tag", short, value_name = "TAG")]
+    #[arg(hide = true)] // TODO: unhide when this gets stabilized (#7528)
+    tags: Option<Vec<String>>,
 }
 
 fn clone_destination_for_source(source: &str) -> Option<&str> {
@@ -177,12 +191,15 @@ pub async fn cmd_git_clone(
     } else {
         args.colocate
     };
-    let is_specific = args.branches.is_some(); // TODO: || args.tags.is_some()
+    let is_specific = args.branches.is_some() || args.tags.is_some();
     let specific_bookmark_expr = match &args.branches {
         Some(texts) => Some(parse_union_name_patterns(ui, texts)?),
         None => is_specific.then(StringExpression::none),
     };
-    let specific_tag_expr = is_specific.then(StringExpression::none);
+    let specific_tag_expr = match &args.tags {
+        Some(texts) => Some(parse_union_name_patterns(ui, texts)?),
+        None => is_specific.then(StringExpression::none),
+    };
 
     // Canonicalize because fs::remove_dir_all() doesn't seem to like e.g.
     // `/some/path/.`
@@ -218,8 +235,6 @@ pub async fn cmd_git_clone(
             // If not explicitly specified on the CLI, configure the remote for only fetching
             // included tags for future fetches.
             args.fetch_tags.unwrap_or(FetchTagsMode::Included),
-            // Default fetch-bookmarks shouldn't be copied to Git config.
-            &specific_bookmark_expr.unwrap_or_else(StringExpression::all),
         )
         .await?;
         let ref_expr = GitFetchRefExpression { bookmark, tag };
@@ -266,18 +281,29 @@ pub async fn cmd_git_clone(
 
     let (mut workspace_command, (working_branch, working_is_default), config_env) = clone_result?;
 
+    write_repo_presets(
+        ui,
+        &config_env,
+        RepoPresets {
+            remote: remote_name,
+            fetch_bookmarks: is_specific.then_some(args.branches.as_deref().unwrap_or(&[])),
+            fetch_tags: is_specific.then_some(args.tags.as_deref().unwrap_or(&[])),
+            trunk: working_branch
+                .as_deref()
+                .filter(|_| working_is_default)
+                .map(|name| name.to_remote_symbol(remote_name)),
+        },
+    )?;
+
     if let Some(name) = &working_branch {
         let working_symbol = name.to_remote_symbol(remote_name);
-        if working_is_default {
-            write_repository_level_trunk_alias(ui, &config_env, working_symbol)?;
-        }
         let working_branch_remote_ref = workspace_command
             .repo()
             .view()
             .get_remote_bookmark(working_symbol);
         if let Some(commit_id) = working_branch_remote_ref.target.as_normal().cloned() {
             let mut tx = workspace_command.start_transaction();
-            if let Ok(commit) = tx.repo().store().get_commit(&commit_id) {
+            if let Ok(commit) = tx.repo().store().get_commit_async(&commit_id).await {
                 tx.check_out(&commit)?;
             }
             tx.finish(
@@ -286,13 +312,6 @@ pub async fn cmd_git_clone(
             )
             .await?;
         }
-    }
-
-    if colocate {
-        writeln!(
-            ui.hint_default(),
-            r"Running `git clean -xdf` will remove `.jj/`!",
-        )?;
     }
 
     Ok(())
@@ -322,7 +341,6 @@ async fn configure_remote(
     remote_name: &RemoteName,
     source: &str,
     fetch_tags: FetchTagsMode,
-    bookmark_expr: &StringExpression,
 ) -> Result<WorkspaceCommandHelper, CommandError> {
     let mut tx = workspace_command.start_transaction();
     git::add_remote(
@@ -331,7 +349,6 @@ async fn configure_remote(
         source,
         None,
         fetch_tags.as_fetch_tags(),
-        bookmark_expr,
     )?;
     tx.finish(ui, format!("add git remote {}", remote_name.as_symbol()))
         .await?;
@@ -447,7 +464,7 @@ async fn fetch_new_remote(
         let remote_symbol = name.to_remote_symbol(remote_name);
         tx.repo_mut().track_remote_bookmark(remote_symbol)?;
     }
-    print_git_import_stats(ui, &tx, &import_stats)?;
+    print_git_import_stats(ui, &tx, &import_stats).await?;
     if git_settings.auto_local_bookmark && !should_track_default {
         writeln!(
             ui.hint_default(),

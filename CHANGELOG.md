@@ -12,11 +12,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+### Deprecations
+
+### New features
+
+### Fixed bugs
+
+* `jj bookmark forget` no longer prints `Forgot N local bookmarks.` when no
+  local bookmarks were actually forgotten (e.g. when only an untracked remote
+  bookmark matched). [#9181](https://github.com/jj-vcs/jj/issues/9181).
+
+## [0.41.0] - 2026-05-06
+
+### Release highlights
+
+* `jj fix` now supports formatting specific line ranges (allowing you to format
+  only modified lines); see the configuration manual and notes below for more.
+
+* The new global flag `--no-integrate-operation` will let you run a command without
+  impacting the repo state or the working copy, which is useful when automated tools
+  may create snapshots in the background.
+
+### Breaking changes
+
 * The `--pattern` flag for `file search` now defaults to `regex:` instead of `glob:`.
 
 * `jj git push --all`/`--tracked`/`-r REVSETS` no longer fails when revisions to
   push are private or have conflicts. Bookmarks which aren't eligible to push
   will be skipped.
+
+* Branch/bookmark patterns passed to `jj git clone` are now saved to jj's repo
+  settings file instead of `.git/config`. Git fetch refspecs are set to the
+  default value.
 
 ### Deprecations
 
@@ -53,6 +80,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 * New `remotes.<name>.fetch-bookmarks`/`fetch-tags` options to [configure
   default fetch targets.](docs/config.md#default-bookmarks-and-tags-to-fetch)
 
+* `JJ_PAGER` can now override the `ui.pager` config, matching `JJ_EDITOR` for
+  callers that need a jj-specific environment override.
+
 ### Fixed bugs
 
 * Improving consistency with `git` handling of `.gitignore`, including `/`
@@ -66,6 +96,53 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 * Pre-existing Git submodule directories are no longer considered conflicts in
   checkouts. [#8065](https://github.com/jj-vcs/jj/issues/8065).
+
+* Fixed a panic in `jj gerrit upload` when run without `-r` and the
+  inferred revision was immutable. [#9398](https://github.com/jj-vcs/jj/issues/9398)
+
+* `jj status` respects path filters in working copy summaries.
+
+* `jj git remote rename`/`remove` now updates the `trunk()` alias.
+
+* Commands would sometimes incorrectly diagnose a stale working copy and suggest
+  running `jj op integrate` when it would have no effect. This should now be
+  much less likely to happen in practice.
+  [#9314](https://github.com/jj-vcs/jj/issues/9314)
+
+### Contributors
+
+Thanks to the people who made this release happen!
+
+* Adrian Freund (@freundTech)
+* ase (@adamse)
+* Austin Seipp (@thoughtpolice)
+* Benjamin Tan (@bnjmnt4n)
+* Björn Kautler (@Vampire)
+* David Higgs (@higgsd)
+* David Rieber (@drieber)
+* dzaima (@dzaima)
+* Federico G. Schwindt (@fgsch)
+* Gaëtan Lehmann (@glehmann)
+* hewigovens (@hewigovens)
+* Ilya Grigoriev (@ilyagr)
+* jonmeow (@jonmeow)
+* Joseph Lou (@josephlou5)
+* Josh McKinney (@joshka)
+* Jun Mukai (@jmuk)
+* Lucas Garron (@lgarron)
+* Martin von Zweigbergk (@martinvonz)
+* Matt Stark (@matts1)
+* Maximilian Gaß (@mxey)
+* OlshaMB (@OlshaMB)
+* Philip Metzger (@PhilipMetzger)
+* rayaq
+* Remo Senekowitsch (@senekor)
+* rishiad (@rishiad)
+* Ryan Patterson (@CGamesPlay)
+* Sebastian Barfurth (@sbarfurth)
+* Thomas Axelsson (@thomasa88)
+* xtqqczze (@xtqqczze)
+* Yuya Nishihara (@yuja)
 
 ## [0.40.0] - 2026-04-01
 
@@ -5017,7 +5094,8 @@ No changes, only trying to get the automated build to work.
 
 Last release before this changelog started.
 
-[unreleased]: https://github.com/jj-vcs/jj/compare/v0.40.0...HEAD
+[unreleased]: https://github.com/jj-vcs/jj/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/jj-vcs/jj/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/jj-vcs/jj/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/jj-vcs/jj/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/jj-vcs/jj/compare/v0.37.0...v0.38.0

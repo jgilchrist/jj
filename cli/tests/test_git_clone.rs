@@ -254,7 +254,6 @@ fn test_git_clone_colocate() -> TestResult {
     ------- stderr -------
     Fetching into new repo in "$TEST_ENV/empty"
     Nothing changed.
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
 
@@ -278,7 +277,6 @@ fn test_git_clone_colocate() -> TestResult {
     Working copy  (@) now at: uuqppmxq 3711b3b5 (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
     let clone_dir = test_env.work_dir("clone");
@@ -424,7 +422,6 @@ fn test_git_clone_colocate() -> TestResult {
     Working copy  (@) now at: vzqnnsmr fea36bca (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
     Ok(())
@@ -450,7 +447,6 @@ fn test_git_clone_colocate_via_config() {
     Working copy  (@) now at: sqpuoqvx 1ca44815 (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
     let clone_dir = test_env.work_dir("clone");
@@ -619,7 +615,6 @@ fn test_git_clone_tags() {
     Working copy  (@) now at: sqpuoqvx 88542a00 (empty) (no description set)
     Parent commit (@-)      : lnmyztun e93ca54d main | message
     Added 2 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
 
@@ -632,7 +627,6 @@ fn test_git_clone_tags() {
     Working copy  (@) now at: uuqppmxq 676b2fd8 (empty) (no description set)
     Parent commit (@-)      : lnmyztun e93ca54d main | message
     Added 2 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
 
@@ -646,7 +640,6 @@ fn test_git_clone_tags() {
     Working copy  (@) now at: pmmvwywv cd5996a2 (empty) (no description set)
     Parent commit (@-)      : lnmyztun e93ca54d main | message
     Added 2 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
 
@@ -658,7 +651,6 @@ fn test_git_clone_tags() {
     Working copy  (@) now at: rzvqmyuk 61c45a3c (empty) (no description set)
     Parent commit (@-)      : lnmyztun e93ca54d main | message
     Added 2 files, modified 0 files, removed 0 files
-    Hint: Running `git clean -xdf` will remove `.jj/`!
     [EOF]
     "#);
 
@@ -1317,7 +1309,7 @@ fn test_git_clone_no_git_executable_with_path() {
 }
 
 #[test]
-fn test_git_clone_branch() {
+fn test_git_clone_branch_or_tag() {
     let test_env = TestEnvironment::default();
     let root_dir = test_env.work_dir("");
     test_env.add_config("remotes.origin.auto-track-bookmarks = '*'");
@@ -1332,6 +1324,10 @@ fn test_git_clone_branch() {
         "feature1 message",
         &[],
     );
+    for name in ["tag1", "tag2", "tag3"] {
+        let full_name = format!("refs/tags/{name}");
+        git::add_commit(&git_repo, &full_name, "file", b"content", name, &[]);
+    }
 
     // Clone the default branch by name
     let output = root_dir.run_jj(["git", "clone", "source", "clone", "--branch", "main"]);
@@ -1343,6 +1339,16 @@ fn test_git_clone_branch() {
     Working copy  (@) now at: sqpuoqvx 1ca44815 (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
+    [EOF]
+    "#);
+
+    // fetch-tags should be set to "~*" because we cloned a specific branch
+    // (without fetching any tags)
+    let repo_dir = test_env.work_dir("clone");
+    insta::assert_snapshot!(repo_dir.run_jj(["config", "list", "--repo"]), @r#"
+    remotes.origin.fetch-bookmarks = "main"
+    remotes.origin.fetch-tags = "~*"
+    revset-aliases."trunk()" = "main@origin"
     [EOF]
     "#);
 
@@ -1375,7 +1381,7 @@ fn test_git_clone_branch() {
     ------- stderr -------
     Fetching into new repo in "$TEST_ENV/clone_non_default"
     bookmark: feature1@origin [new] tracked
-    Working copy  (@) now at: pmmvwywv d16a31e5 (empty) (no description set)
+    Working copy  (@) now at: rzvqmyuk 5badc4c2 (empty) (no description set)
     Parent commit (@-)      : yxwyzxtq 14835edf feature1 | feature1 message
     Added 1 files, modified 0 files, removed 0 files
     [EOF]
@@ -1383,6 +1389,39 @@ fn test_git_clone_branch() {
 
     // Perform a fetch in that same repo
     let repo_dir = test_env.work_dir("clone_non_default");
+    let output = repo_dir.run_jj(["git", "fetch"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Nothing changed.
+    [EOF]
+    ");
+
+    // Clone multiple tags by name
+    let output = root_dir.run_jj([
+        "git",
+        "clone",
+        "source",
+        "clone_tags",
+        "--tag=tag1",
+        "--tag=tag2",
+    ]);
+    insta::assert_snapshot!(output, @r#"
+    ------- stderr -------
+    Fetching into new repo in "$TEST_ENV/clone_tags"
+    tag: tag1@origin [new] 
+    tag: tag2@origin [new] 
+    [EOF]
+    "#);
+
+    // fetch-tags should be set to "<name1> | <name2> | ..."
+    let repo_dir = test_env.work_dir("clone_tags");
+    insta::assert_snapshot!(repo_dir.run_jj(["config", "list", "--repo"]), @r#"
+    remotes.origin.fetch-bookmarks = "~*"
+    remotes.origin.fetch-tags = "tag1 | tag2"
+    [EOF]
+    "#);
+
+    // Perform a fetch in that same repo
     let output = repo_dir.run_jj(["git", "fetch"]);
     insta::assert_snapshot!(output, @"
     ------- stderr -------
@@ -1398,33 +1437,43 @@ fn test_git_clone_branch() {
     bookmark: feature1@origin [new] tracked
     bookmark: main@origin     [new] tracked
     Setting the revset alias `trunk()` to `main@origin`
-    Working copy  (@) now at: zxsnswpr 56139679 (empty) (no description set)
+    Working copy  (@) now at: wmwvqwsz 5068d576 (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
     [EOF]
     "#);
 
-    // Clone all but feature1
+    // Clone all but feature1 and tag1
     let output = root_dir.run_jj([
         "git",
         "clone",
         "source",
-        "clone_all_but_feature1",
+        "clone_all_but",
         "--branch=~feature1",
+        "--tag=~tag1",
     ]);
     insta::assert_snapshot!(output, @r#"
     ------- stderr -------
-    Fetching into new repo in "$TEST_ENV/clone_all_but_feature1"
+    Fetching into new repo in "$TEST_ENV/clone_all_but"
     bookmark: main@origin [new] tracked
+    tag: tag2@origin [new] 
+    tag: tag3@origin [new] 
     Setting the revset alias `trunk()` to `main@origin`
-    Working copy  (@) now at: nppvrztz b16020e9 (empty) (no description set)
+    Working copy  (@) now at: uuzqqzqu c871b515 (empty) (no description set)
     Parent commit (@-)      : qomsplrm ebeb70d8 main | message
     Added 1 files, modified 0 files, removed 0 files
     [EOF]
     "#);
 
+    let repo_dir = test_env.work_dir("clone_all_but");
+    insta::assert_snapshot!(repo_dir.run_jj(["config", "list", "--repo"]), @r#"
+    remotes.origin.fetch-bookmarks = "~feature1"
+    remotes.origin.fetch-tags = "~tag1"
+    revset-aliases."trunk()" = "main@origin"
+    [EOF]
+    "#);
+
     // Perform a fetch in that same repo
-    let repo_dir = test_env.work_dir("clone_all_but_feature1");
     let output = repo_dir.run_jj(["git", "fetch"]);
     insta::assert_snapshot!(output, @"
     ------- stderr -------
@@ -1446,7 +1495,7 @@ fn test_git_clone_branch() {
     Fetching into new repo in "$TEST_ENV/clone_each"
     bookmark: feature1@origin [new] tracked
     bookmark: main@origin     [new] tracked
-    Working copy  (@) now at: nuwvvtmy 38b11a7f (empty) (no description set)
+    Working copy  (@) now at: mouksmqu 41e09dcd (empty) (no description set)
     Parent commit (@-)      : yxwyzxtq 14835edf feature1 | feature1 message
     Added 1 files, modified 0 files, removed 0 files
     [EOF]

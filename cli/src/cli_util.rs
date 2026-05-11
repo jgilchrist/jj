@@ -48,6 +48,7 @@ use clap::error::ContextValue;
 use clap_complete::ArgValueCandidates;
 use clap_complete::ArgValueCompleter;
 use futures::TryStreamExt as _;
+use futures::future::try_join_all;
 use indexmap::IndexMap;
 use indexmap::IndexSet;
 use indoc::indoc;
@@ -454,8 +455,8 @@ impl CommandHelper {
 
     /// Loads workspace and repo, then snapshots the working copy if allowed.
     #[instrument(skip(self, ui))]
-    pub fn workspace_helper(&self, ui: &Ui) -> Result<WorkspaceCommandHelper, CommandError> {
-        let (workspace_command, stats) = self.workspace_helper_with_stats(ui)?;
+    pub async fn workspace_helper(&self, ui: &Ui) -> Result<WorkspaceCommandHelper, CommandError> {
+        let (workspace_command, stats) = self.workspace_helper_with_stats(ui).await?;
         print_snapshot_stats(ui, &stats, workspace_command.env().path_converter())?;
         Ok(workspace_command)
     }
@@ -467,14 +468,13 @@ impl CommandHelper {
     /// call [`print_snapshot_stats`] with the [`SnapshotStats`] returned by
     /// this function to present possible untracked files to the user.
     #[instrument(skip(self, ui))]
-    pub fn workspace_helper_with_stats(
+    pub async fn workspace_helper_with_stats(
         &self,
         ui: &Ui,
     ) -> Result<(WorkspaceCommandHelper, SnapshotStats), CommandError> {
-        let mut workspace_command = self.workspace_helper_no_snapshot(ui)?;
+        let mut workspace_command = self.workspace_helper_no_snapshot(ui).await?;
 
-        let (workspace_command, stats) = match workspace_command.maybe_snapshot_impl(ui).block_on()
-        {
+        let (workspace_command, stats) = match workspace_command.maybe_snapshot_impl(ui).await {
             Ok(stats) => (workspace_command, stats),
             Err(SnapshotWorkingCopyError::Command(err)) => return Err(err),
             Err(SnapshotWorkingCopyError::StaleWorkingCopy(err)) => {
@@ -487,7 +487,7 @@ impl CommandHelper {
                 // auto-update-stale, so let's do that now. We need to do it up here, not at a
                 // lower level (e.g. inside snapshot_working_copy()) to avoid recursive locking
                 // of the working copy.
-                self.recover_stale_working_copy(ui).block_on()?
+                self.recover_stale_working_copy(ui).await?
             }
         };
 
@@ -497,14 +497,14 @@ impl CommandHelper {
     /// Loads workspace and repo, but never snapshots the working copy. Most
     /// commands should use `workspace_helper()` instead.
     #[instrument(skip(self, ui))]
-    pub fn workspace_helper_no_snapshot(
+    pub async fn workspace_helper_no_snapshot(
         &self,
         ui: &Ui,
     ) -> Result<WorkspaceCommandHelper, CommandError> {
         let workspace = self.load_workspace()?;
         let op_head =
             self.resolve_operation(ui, workspace.repo_loader(), workspace.workspace_name())?;
-        let repo = workspace.repo_loader().load_at(&op_head).block_on()?;
+        let repo = workspace.repo_loader().load_at(&op_head).await?;
         let mut env = self.workspace_environment(ui, &workspace)?;
         if let Err(err) =
             revset_util::try_resolve_trunk_alias(repo.as_ref(), &env.revset_parse_context())
@@ -606,11 +606,12 @@ impl CommandHelper {
                 let repo = workspace_command.repo().clone();
                 let stale_wc_commit = repo.store().get_commit_async(wc_commit_id).await?;
 
-                let mut workspace_command = self.workspace_helper_no_snapshot(ui)?;
+                let mut workspace_command = self.workspace_helper_no_snapshot(ui).await?;
 
                 let repo = workspace_command.repo().clone();
-                let (mut locked_ws, desired_wc_commit) =
-                    workspace_command.unchecked_start_working_copy_mutation()?;
+                let (mut locked_ws, desired_wc_commit) = workspace_command
+                    .unchecked_start_working_copy_mutation()
+                    .await?;
                 match WorkingCopyFreshness::check_stale(
                     locked_ws.locked_wc(),
                     &desired_wc_commit,
@@ -672,7 +673,7 @@ impl CommandHelper {
                      message from read attempt: {e}"
                 )?;
 
-                let mut workspace_command = self.workspace_helper_no_snapshot(ui)?;
+                let mut workspace_command = self.workspace_helper_no_snapshot(ui).await?;
                 let stats = workspace_command
                     .create_and_check_out_recovery_commit(ui)
                     .await?;
@@ -1312,12 +1313,12 @@ impl WorkspaceCommandHelper {
         let new_git_head = tx.repo().view().git_head().clone();
         if let Some(new_git_head_id) = new_git_head.as_normal() {
             let workspace_name = self.workspace_name().to_owned();
-            let new_git_head_commit = tx.repo().store().get_commit(new_git_head_id)?;
+            let new_git_head_commit = tx.repo().store().get_commit_async(new_git_head_id).await?;
             let wc_commit = tx
                 .repo_mut()
                 .check_out(workspace_name, &new_git_head_commit)
                 .await?;
-            let mut locked_ws = self.workspace.start_working_copy_mutation()?;
+            let mut locked_ws = self.workspace.start_working_copy_mutation().await?;
             // The working copy was presumably updated by the git command that updated
             // HEAD, so we just need to reset our working copy
             // state to it without updating working copy files.
@@ -1415,25 +1416,25 @@ impl WorkspaceCommandHelper {
         &self.env
     }
 
-    pub fn unchecked_start_working_copy_mutation(
+    pub async fn unchecked_start_working_copy_mutation(
         &mut self,
     ) -> Result<(LockedWorkspace<'_>, Commit), CommandError> {
         self.check_working_copy_writable()?;
         let wc_commit = if let Some(wc_commit_id) = self.get_wc_commit_id() {
-            self.repo().store().get_commit(wc_commit_id)?
+            self.repo().store().get_commit_async(wc_commit_id).await?
         } else {
             return Err(user_error("Nothing checked out in this workspace"));
         };
 
-        let locked_ws = self.workspace.start_working_copy_mutation()?;
+        let locked_ws = self.workspace.start_working_copy_mutation().await?;
 
         Ok((locked_ws, wc_commit))
     }
 
-    pub fn start_working_copy_mutation(
+    pub async fn start_working_copy_mutation(
         &mut self,
     ) -> Result<(LockedWorkspace<'_>, Commit), CommandError> {
-        let (mut locked_ws, wc_commit) = self.unchecked_start_working_copy_mutation()?;
+        let (mut locked_ws, wc_commit) = self.unchecked_start_working_copy_mutation().await?;
         if wc_commit.tree().tree_ids_and_labels()
             != locked_ws.locked_wc().old_tree().tree_ids_and_labels()
         {
@@ -1449,7 +1450,7 @@ impl WorkspaceCommandHelper {
         self.check_working_copy_writable()?;
 
         let workspace_name = self.workspace_name().to_owned();
-        let mut locked_ws = self.workspace.start_working_copy_mutation()?;
+        let mut locked_ws = self.workspace.start_working_copy_mutation().await?;
         let (repo, new_commit) = working_copy::create_and_check_out_recovery_commit(
             locked_ws.locked_wc(),
             &self.user_repo.repo,
@@ -2013,6 +2014,7 @@ to the current parents may contain changes from multiple commits.
         let mut locked_ws = self
             .workspace
             .start_working_copy_mutation()
+            .await
             .map_err(snapshot_command_error)?;
 
         let Some((repo, wc_commit)) =
@@ -3306,17 +3308,17 @@ impl LogContentFormat {
     }
 
     /// Writes content which will optionally be wrapped at the current width.
-    pub fn write<E: From<io::Error>>(
+    pub async fn write<E: From<io::Error>>(
         &self,
         formatter: &mut dyn Formatter,
-        content_fn: impl FnOnce(&mut dyn Formatter) -> Result<(), E>,
+        content_fn: impl AsyncFnOnce(&mut dyn Formatter) -> Result<(), E>,
     ) -> Result<(), E> {
         if self.word_wrap {
             let mut recorder = FormatRecorder::new(formatter.maybe_color());
-            content_fn(&mut recorder)?;
+            content_fn(&mut recorder).await?;
             text_util::write_wrapped(formatter, &recorder, self.width)?;
         } else {
-            content_fn(formatter)?;
+            content_fn(formatter).await?;
         }
         Ok(())
     }
@@ -3479,7 +3481,7 @@ pub async fn compute_commit_location(
                 (after_commit_ids, before_commit_ids)
             }
             (None, Some(after_commit_ids), None) => {
-                let new_child_ids: Vec<_> = RevsetExpression::commits(after_commit_ids.clone())
+                let new_child_ids = RevsetExpression::commits(after_commit_ids.clone())
                     .children()
                     .evaluate(workspace_command.repo().as_ref())?
                     .stream()
@@ -3489,10 +3491,12 @@ pub async fn compute_commit_location(
                 (after_commit_ids, new_child_ids)
             }
             (None, None, Some(before_commit_ids)) => {
-                let before_commits: Vec<_> = before_commit_ids
-                    .iter()
-                    .map(|id| workspace_command.repo().store().get_commit(id))
-                    .try_collect()?;
+                let before_commits = try_join_all(
+                    before_commit_ids
+                        .iter()
+                        .map(|id| workspace_command.repo().store().get_commit_async(id)),
+                )
+                .await?;
                 // Not using `RevsetExpression::parents` here to persist the order of parents
                 // specified in `before_commits`.
                 let new_parent_ids = before_commits

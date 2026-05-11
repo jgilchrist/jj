@@ -27,7 +27,6 @@ use tracing::instrument;
 
 use crate::backend::BackendError;
 use crate::commit::Commit;
-use crate::dag_walk_async;
 use crate::gitattributes::GitAttributesError;
 use crate::gitignore::GitIgnoreError;
 use crate::gitignore::GitIgnoreFile;
@@ -35,6 +34,7 @@ use crate::matchers::Matcher;
 use crate::merged_tree::MergedTree;
 use crate::op_store::OpStoreError;
 use crate::op_store::OperationId;
+use crate::op_walk;
 use crate::operation::Operation;
 use crate::ref_name::WorkspaceName;
 use crate::ref_name::WorkspaceNameBuf;
@@ -49,6 +49,7 @@ use crate::store::Store;
 use crate::transaction::TransactionCommitError;
 
 /// The trait all working-copy implementations must implement.
+#[async_trait(?Send)]
 pub trait WorkingCopy: Any + Send {
     /// The name/id of the implementation. Used for choosing the right
     /// implementation when loading a working copy.
@@ -71,7 +72,7 @@ pub trait WorkingCopy: Any + Send {
 
     /// Locks the working copy and returns an instance with methods for updating
     /// the working copy files and state.
-    fn start_mutation(&self) -> Result<Box<dyn LockedWorkingCopy>, WorkingCopyStateError>;
+    async fn start_mutation(&self) -> Result<Box<dyn LockedWorkingCopy>, WorkingCopyStateError>;
 }
 
 impl dyn WorkingCopy {
@@ -377,14 +378,9 @@ impl WorkingCopyFreshness {
                 .load_operation(locked_wc.old_operation_id())
                 .await?;
             let repo_operation = repo.operation();
-            let ancestor_op = dag_walk_async::closest_common_node(
-                [wc_operation.clone()],
-                [repo_operation.clone()],
-                |op: &Operation| op.id().clone(),
-                async |op: &Operation| op.parents().await,
-            )
-            .await?
-            .expect("unrelated operations");
+            let ancestor_op =
+                op_walk::closest_common_ancestor([wc_operation.clone()], [repo_operation.clone()])
+                    .await?;
             if ancestor_op.id() == repo_operation.id() {
                 // The working copy was updated since we loaded the repo. The repo must be
                 // reloaded at the working copy's operation.

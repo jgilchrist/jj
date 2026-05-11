@@ -416,7 +416,7 @@ pub async fn cmd_gerrit_upload(
         remote_push_options: push_options(args)?,
     };
 
-    let mut workspace_command = command.workspace_helper(ui)?;
+    let mut workspace_command = command.workspace_helper(ui).await?;
 
     let revisions: Vec<_> = if args.revisions.is_empty() {
         match workspace_command
@@ -430,7 +430,7 @@ pub async fn cmd_gerrit_upload(
             }
             // This distinguishes between the "squash workflow" and "edit workflow".
             Some(commit) => {
-                if commit.description().is_empty() {
+                let revisions = if commit.description().is_empty() {
                     let parents = commit.parent_ids();
                     if parents.len() != 1 {
                         return Err(user_error(
@@ -447,7 +447,10 @@ pub async fn cmd_gerrit_upload(
                 } else {
                     writeln!(ui.status(), "No revision provided. Defaulting to @")?;
                     vec![commit.id().clone()]
-                }
+                };
+
+                workspace_command.check_rewritable(&revisions).await?;
+                revisions
             }
         }
     } else {
@@ -649,8 +652,10 @@ pub async fn cmd_gerrit_upload(
             // We have to write the old commit here, because until we finish
             // the transaction (which we don't), the new commit is labeled as
             // "hidden".
-            tx.base_workspace_helper()
-                .write_commit_summary(formatter.as_mut(), &store.get_commit(head).unwrap())?;
+            tx.base_workspace_helper().write_commit_summary(
+                formatter.as_mut(),
+                &store.get_commit_async(head).await.unwrap(),
+            )?;
             writeln!(formatter)?;
         }
 

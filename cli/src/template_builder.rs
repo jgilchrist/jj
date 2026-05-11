@@ -1820,23 +1820,41 @@ fn builtin_timestamp_methods<'a, L: TemplateLanguage<'a> + ?Sized>()
     );
     map.insert(
         "format",
-        |_language, diagnostics, _build_ctx, self_property, function| {
-            // No dynamic string is allowed as the templater has no runtime error type.
+        |language, diagnostics, build_ctx, self_property, function| {
             let [format_node] = function.expect_exact_arguments()?;
-            let format =
-                template_parser::catch_aliases(diagnostics, format_node, |_diagnostics, node| {
-                    let format = template_parser::expect_string_literal(node)?;
-                    time_util::FormattingItems::parse(format).ok_or_else(|| {
-                        TemplateParseError::expression("Invalid time format", node.span)
-                    })
-                })?
+            let format_property =
+                expect_stringify_expression(language, diagnostics, build_ctx, format_node)?;
+            if let Ok(format) = format_property.extract() {
+                let format = template_parser::catch_aliases(
+                    diagnostics,
+                    format_node,
+                    |_diagnostics, node| {
+                        time_util::FormattingItems::parse(&format).ok_or_else(|| {
+                            TemplateParseError::expression("Invalid time format", node.span)
+                        })
+                    },
+                )?
                 .into_owned();
-            let out_property = self_property.and_then(move |timestamp| {
-                Ok(time_util::format_absolute_timestamp_with(
-                    &timestamp, &format,
-                )?)
-            });
-            Ok(out_property.into_dyn_wrapped())
+                let out_property = self_property.and_then(move |timestamp| {
+                    Ok(time_util::format_absolute_timestamp_with(
+                        &timestamp, &format,
+                    )?)
+                });
+                Ok(out_property.into_dyn_wrapped())
+            } else {
+                let out_property =
+                    (self_property, format_property).and_then(move |(timestamp, format)| {
+                        let format =
+                            time_util::FormattingItems::parse(&format).ok_or_else(|| {
+                                let message = format!("Invalid time format: {format}");
+                                TemplatePropertyError(message.into())
+                            })?;
+                        Ok(time_util::format_absolute_timestamp_with(
+                            &timestamp, &format,
+                        )?)
+                    });
+                Ok(out_property.into_dyn_wrapped())
+            }
         },
     );
     map.insert(
@@ -2555,10 +2573,13 @@ fn builtin_functions<'a, L: TemplateLanguage<'a> + ?Sized>() -> TemplateBuildFun
         let name_expression =
             expect_stringify_expression(language, diagnostics, build_ctx, name_node)?;
         if let Ok(name) = name_expression.extract() {
-            let config_path: ConfigNamePathBuf = name.parse().map_err(|err| {
-                TemplateParseError::expression("Failed to parse config name", name_node.span)
-                    .with_source(err)
-            })?;
+            let config_path: ConfigNamePathBuf =
+                template_parser::catch_aliases(diagnostics, name_node, |_diagnostics, node| {
+                    name.parse().map_err(|err| {
+                        TemplateParseError::expression("Failed to parse config name", node.span)
+                            .with_source(err)
+                    })
+                })?;
             let value = language
                 .settings()
                 .get_value(config_path)
@@ -4567,25 +4588,13 @@ mod tests {
           = Invalid time format
         "#);
 
-        // Invalid type
-        insta::assert_snapshot!(env.parse_err(r#"t0.format(0)"#), @"
-         --> 1:11
-          |
-        1 | t0.format(0)
-          |           ^
-          |
-          = Expected string literal
-        ");
-
-        // Dynamic string isn't supported yet
-        insta::assert_snapshot!(env.parse_err(r#"t0.format("%Y" ++ "%m")"#), @r#"
-         --> 1:11
-          |
-        1 | t0.format("%Y" ++ "%m")
-          |           ^----------^
-          |
-          = Expected string literal
-        "#);
+        // Dynamic format string
+        env.add_dynamic_keyword("good_dyn_format", || "%Y%m".to_owned());
+        env.add_dynamic_keyword("bad_dyn_format", || "%_".to_owned());
+        insta::assert_snapshot!(env.render_ok("t0.format(good_dyn_format)"), @"197001");
+        insta::assert_snapshot!(
+            env.render_ok("t0.format(bad_dyn_format)"),
+            @"<Error: Invalid time format: %_>");
 
         // Literal alias expansion
         env.add_alias("time_format", r#""%Y-%m-%d""#);
@@ -5560,11 +5569,18 @@ mod tests {
         insta::assert_snapshot!(env.render_ok(r#"if(config("non.existent"), "yes", "no")"#), @"no");
 
         // malformed config path
-        insta::assert_snapshot!(env.parse_err("config('user|name')"), @"
+        env.add_alias("bad_config_name", "'user|name'");
+        insta::assert_snapshot!(env.parse_err("config(bad_config_name)"), @"
          --> 1:8
           |
-        1 | config('user|name')
-          |        ^---------^
+        1 | config(bad_config_name)
+          |        ^-------------^
+          |
+          = In alias `bad_config_name`
+         --> 1:1
+          |
+        1 | 'user|name'
+          | ^---------^
           |
           = Failed to parse config name
         TOML parse error at line 1, column 5

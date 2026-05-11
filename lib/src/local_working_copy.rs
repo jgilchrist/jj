@@ -43,7 +43,10 @@ use std::time::SystemTime;
 
 use async_trait::async_trait;
 use either::Either;
+use futures::AsyncRead;
+use futures::AsyncReadExt as _;
 use futures::StreamExt as _;
+use futures::io::AllowStdIo;
 use itertools::EitherOrBoth;
 use itertools::Itertools as _;
 use once_cell::unsync::OnceCell;
@@ -54,8 +57,6 @@ use rayon::prelude::IndexedParallelIterator as _;
 use rayon::prelude::ParallelIterator as _;
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt as _;
 use tracing::instrument;
 use tracing::trace_span;
 
@@ -79,7 +80,6 @@ use crate::conflicts::materialize_merge_result_to_bytes;
 use crate::conflicts::materialize_tree_value;
 pub use crate::eol::EolConversionMode;
 use crate::eol::TargetEolStrategy;
-use crate::file_util::BlockingAsyncReader;
 use crate::file_util::FileIdentity;
 use crate::file_util::check_symlink_support;
 use crate::file_util::copy_async_to_sync;
@@ -1968,7 +1968,7 @@ impl FileSnapshotter<'_> {
             })?;
             self.tree_state
                 .target_eol_strategy
-                .convert_eol_for_snapshot(BlockingAsyncReader::new(file))
+                .convert_eol_for_snapshot(AllowStdIo::new(file))
                 .await
                 .map_err(|err| SnapshotError::Other {
                     message: "Failed to convert the EOL".to_string(),
@@ -2033,7 +2033,7 @@ impl FileSnapshotter<'_> {
         let mut contents = self
             .tree_state
             .target_eol_strategy
-            .convert_eol_for_snapshot(BlockingAsyncReader::new(file))
+            .convert_eol_for_snapshot(AllowStdIo::new(file))
             .await
             .map_err(|err| SnapshotError::Other {
                 message: "Failed to convert the EOL".to_string(),
@@ -2651,6 +2651,7 @@ pub struct LocalWorkingCopy {
     tree_state_settings: TreeStateSettings,
 }
 
+#[async_trait(?Send)]
 impl WorkingCopy for LocalWorkingCopy {
     fn name(&self) -> &str {
         Self::name()
@@ -2672,7 +2673,7 @@ impl WorkingCopy for LocalWorkingCopy {
         Ok(self.tree_state()?.sparse_patterns())
     }
 
-    fn start_mutation(&self) -> Result<Box<dyn LockedWorkingCopy>, WorkingCopyStateError> {
+    async fn start_mutation(&self) -> Result<Box<dyn LockedWorkingCopy>, WorkingCopyStateError> {
         let lock_path = self.state_path.join("working_copy.lock");
         let lock = FileLock::lock(lock_path).map_err(|err| WorkingCopyStateError {
             message: "Failed to lock working copy".to_owned(),
