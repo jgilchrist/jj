@@ -79,29 +79,37 @@ pub async fn cmd_bookmark_move(
     let repo = workspace_command.repo().clone();
     let target_commit = workspace_command.resolve_single_rev(ui, &args.to).await?;
     let matched_bookmarks = {
-        let is_source_ref: Box<dyn Fn(&RefTarget) -> _> = if !args.from.is_empty() {
-            let is_source_commit = workspace_command
-                .parse_union_revsets(ui, &args.from)?
-                .evaluate()?
-                .containing_fn();
-            Box::new(move |target| fallible_any(target.added_ids(), &is_source_commit))
+        let is_source_commit = if !args.from.is_empty() {
+            Some(
+                workspace_command
+                    .parse_union_revsets(ui, &args.from)?
+                    .evaluate()?
+                    .containing_fn(),
+            )
         } else {
-            Box::new(|_| Ok(true))
+            None
         };
+        let is_source_ref =
+            async |target: &RefTarget| -> Result<bool, CommandError> {
+                match &is_source_commit {
+                    Some(is_source_commit) => Ok(fallible_any(target.added_ids(), async |old| {
+                        is_source_commit(old).await
+                    })
+                    .await?),
+                    None => Ok(true),
+                }
+            };
         let name_expr = match &args.names {
             Some(texts) => parse_union_name_patterns(ui, texts)?,
             None => StringExpression::all(),
         };
         let name_matcher = name_expr.to_matcher();
-        let mut bookmarks: Vec<_> = repo
-            .view()
-            .local_bookmarks_matching(&name_matcher)
-            .filter_map(|(name, target)| {
-                is_source_ref(target)
-                    .map(|matched| matched.then_some((name, target)))
-                    .transpose()
-            })
-            .try_collect()?;
+        let mut bookmarks = vec![];
+        for (name, target) in repo.view().local_bookmarks_matching(&name_matcher) {
+            if is_source_ref(target).await? {
+                bookmarks.push((name, target));
+            }
+        }
         warn_unmatched_local_bookmarks(ui, repo.view(), &name_expr)?;
         // Noop matches aren't errors, but should be excluded from stats.
         bookmarks.retain(|(_, old_target)| old_target.as_normal() != Some(target_commit.id()));
@@ -116,11 +124,12 @@ pub async fn cmd_bookmark_move(
     if !args.allow_backwards
         && let Some((name, _)) = fallible_find(
             matched_bookmarks.iter(),
-            |(_, old_target)| -> Result<_, CommandError> {
-                let is_ff = is_fast_forward(repo.as_ref(), old_target, target_commit.id())?;
+            async |(_, old_target)| -> Result<_, CommandError> {
+                let is_ff = is_fast_forward(repo.as_ref(), old_target, target_commit.id()).await?;
                 Ok(!is_ff)
             },
-        )?
+        )
+        .await?
     {
         return Err(user_error(format!(
             "Refusing to move bookmark backwards or sideways: {name}",

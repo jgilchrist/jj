@@ -45,6 +45,7 @@ use jj_lib::working_copy::SnapshotError;
 use thiserror::Error;
 
 use self::builtin::BuiltinToolError;
+pub use self::builtin::InitialSelection;
 use self::builtin::edit_diff_builtin;
 use self::builtin::edit_merge_builtin;
 use self::diff_working_copies::DiffCheckoutError;
@@ -314,11 +315,12 @@ impl DiffEditor {
         trees: Diff<&MergedTree>,
         matcher: &dyn Matcher,
         format_instructions: impl FnOnce() -> String,
+        initial_selection: InitialSelection,
     ) -> Result<MergedTree, DiffEditError> {
         match &self.tool {
             DiffEditTool::Builtin => {
                 Ok(
-                    edit_diff_builtin(trees, matcher, self.conflict_marker_style)
+                    edit_diff_builtin(trees, matcher, self.conflict_marker_style, initial_selection)
                         .await
                         .map_err(Box::new)?,
                 )

@@ -580,7 +580,7 @@ async fn rewrite_commit(
 /// - JJ_COMMIT_ID
 /// - JJ_WORKSPACE_ROOT
 ///
-/// # Example
+/// ### Example
 ///
 /// ```shell
 /// # Run pre-commit on your local work
